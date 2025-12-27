@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NEURO_CHESS_ZERO
+
+A self-learning chess AI that plays against itself using Q-learning with position memory. Watch two neural networks compete and evolve in real-time.
+
+![Chess AI Interface](https://img.shields.io/badge/Next.js-15-black?logo=next.js) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript) ![Socket.io](https://img.shields.io/badge/Socket.io-Realtime-green?logo=socket.io)
+
+## Features
+
+- 🧠 **Dual AI Networks** - White and Black AIs compete separately with their own ELO ratings
+- 📚 **Q-Learning** - AIs learn from wins/losses, storing up to 10,000 positions per network
+- 🎯 **Epsilon-Greedy Exploration** - Balance between trying new moves and exploiting known good ones
+- 📊 **Live Metrics** - Real-time ELO tracking, win/loss/draw stats, and learning progress
+- 📈 **Eval Bar** - Visual representation of who's winning
+- ⏱️ **Speed Control** - Adjust training speed from slow (1500ms) to turbo (50ms)
+- 📜 **Game History** - Browse and replay past games move-by-move
+- 💾 **Persistent Learning** - AI progress saves between sessions
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+# Install dependencies
+npm install
+
+# Run the development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to watch the AI train.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How It Works
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Q-Learning
+Each AI maintains a Q-table mapping positions to move values. After each game:
+- **Winner's moves** get positive reinforcement (+1.0)
+- **Loser's moves** get negative reinforcement (-1.0)
+- **Draws** give small positive rewards (+0.1)
 
-## Learn More
+### Exploration vs Exploitation
+- **Exploration Rate** starts at 30% (try random moves)
+- Decays to 5% as the AI gains experience
+- Higher exploration = more variety, lower = more optimal play
 
-To learn more about Next.js, take a look at the following resources:
+### Persistence
+Two files store AI progress:
+- `ai-state.json` - ELO, stats, and Q-tables for both networks
+- `game-history.json` - Up to 50 past games for replay
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Tech Stack
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Frontend**: Next.js 15, React 19, TailwindCSS, Recharts
+- **Backend**: Node.js, Socket.io, chess.js
+- **AI**: Custom Q-learning implementation
 
-## Deploy on Vercel
+## Project Structure
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+├── server.ts              # Custom server with Socket.io
+├── src/
+│   ├── app/               # Next.js app router
+│   ├── components/        # React components
+│   │   ├── CustomBoard.tsx    # SVG chess board
+│   │   ├── EvalBar.tsx        # Evaluation bar
+│   │   ├── MetricsPanel.tsx   # Dual AI stats display
+│   │   ├── SpeedControl.tsx   # Training speed slider
+│   │   └── GameHistory.tsx    # Past games viewer
+│   └── lib/
+│       ├── ai/
+│       │   └── neural-net.ts   # Q-learning AI implementation
+│       ├── game/
+│       │   └── game-manager.ts # Game loop and state management
+│       └── persistence.ts      # Save/load AI state
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## License
+
+MIT
