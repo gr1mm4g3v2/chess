@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import CustomBoard from "@/components/CustomBoard";
 import MetricsPanel from "@/components/MetricsPanel";
 import EvalBar from "@/components/EvalBar";
 import SpeedControl from "@/components/SpeedControl";
+import GameHistory from "@/components/GameHistory";
 
 interface NetworkStats {
     elo: number;
@@ -17,6 +18,17 @@ interface NetworkStats {
     explorationRate: number;
 }
 
+interface GameRecord {
+    id: number;
+    timestamp: string;
+    pgn: string;
+    moves: string[];
+    result: 'white' | 'black' | 'draw';
+    reason: string;
+    whiteElo: number;
+    blackElo: number;
+}
+
 export default function Home() {
     const [fen, setFen] = useState("start");
     const [lastMove, setLastMove] = useState<any>(null);
@@ -24,6 +36,9 @@ export default function Home() {
     const [blackStats, setBlackStats] = useState<NetworkStats | null>(null);
     const [evaluation, setEvaluation] = useState<number>(0);
     const [eloHistory, setEloHistory] = useState<{ move: number; whiteElo: number; blackElo: number }[]>([]);
+    const [showHistory, setShowHistory] = useState(false);
+    const [gameHistory, setGameHistory] = useState<GameRecord[]>([]);
+    const [isReplaying, setIsReplaying] = useState(false);
     const socketRef = useRef<Socket | null>(null);
 
     useEffect(() => {
@@ -37,13 +52,14 @@ export default function Home() {
         });
 
         socket.on("game_state", (data: any) => {
-            setFen(data.fen);
+            if (!isReplaying) {
+                setFen(data.fen);
+                setLastMove(data.lastMove);
+            }
             setWhiteStats(data.whiteStats);
             setBlackStats(data.blackStats);
-            setLastMove(data.lastMove);
             setEvaluation(data.evaluation || 0);
 
-            // Update ELO history for chart
             if (data.whiteStats && data.blackStats) {
                 setEloHistory(prev => {
                     const newEntry = {
@@ -62,11 +78,33 @@ export default function Home() {
             console.log("Game Over", data);
         });
 
+        socket.on("game_history", (history: GameRecord[]) => {
+            setGameHistory(history);
+        });
+
         return () => {
             socket.disconnect();
             socketRef.current = null;
         };
+    }, [isReplaying]);
+
+    const openHistory = () => {
+        if (socketRef.current) {
+            socketRef.current.emit('get_history');
+        }
+        setShowHistory(true);
+    };
+
+    const handleReplay = useCallback((replayFen: string) => {
+        setIsReplaying(true);
+        setFen(replayFen);
+        setLastMove(null);
     }, []);
+
+    const closeHistory = () => {
+        setShowHistory(false);
+        setIsReplaying(false);
+    };
 
     return (
         <main className="min-h-screen bg-[#0a0a0a] text-white flex flex-col items-center justify-center p-4 md:p-12 relative overflow-hidden">
@@ -78,7 +116,14 @@ export default function Home() {
                 {/* Left: Main Board with Eval Bar */}
                 <div className="lg:col-span-2 flex justify-center items-stretch gap-3">
                     <EvalBar evaluation={evaluation} />
-                    <CustomBoard fen={fen} lastMove={lastMove} />
+                    <div className="relative">
+                        <CustomBoard fen={fen} lastMove={lastMove} />
+                        {isReplaying && (
+                            <div className="absolute top-2 left-2 px-2 py-1 bg-yellow-500/80 text-black text-xs font-bold rounded">
+                                REPLAY MODE
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* Right: Metrics */}
@@ -92,11 +137,24 @@ export default function Home() {
             </div>
 
             <div className="mt-8 text-center z-10 flex flex-col items-center gap-4">
-                <SpeedControl onSpeedChange={(speedMs) => {
-                    if (socketRef.current) {
-                        socketRef.current.emit('set_speed', speedMs);
-                    }
-                }} />
+                <div className="flex items-center gap-3">
+                    <SpeedControl onSpeedChange={(speedMs) => {
+                        if (socketRef.current) {
+                            socketRef.current.emit('set_speed', speedMs);
+                        }
+                    }} />
+                    <button
+                        onClick={openHistory}
+                        className="flex items-center gap-2 px-3 py-2 bg-neutral-800/50 hover:bg-neutral-700/50 border border-neutral-700 rounded-lg transition-colors text-sm"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M3 3v5h5" />
+                            <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+                            <path d="M12 7v5l4 2" />
+                        </svg>
+                        <span className="font-mono text-xs">History</span>
+                    </button>
+                </div>
                 <div className="opacity-50">
                     <h1 className="text-2xl font-bold tracking-tighter mb-1">NEURO_CHESS_ZERO</h1>
                     <p className="font-mono text-xs max-w-lg mx-auto">
@@ -104,6 +162,14 @@ export default function Home() {
                     </p>
                 </div>
             </div>
+
+            {showHistory && (
+                <GameHistory
+                    games={gameHistory}
+                    onReplay={handleReplay}
+                    onClose={closeHistory}
+                />
+            )}
         </main>
     );
 }
