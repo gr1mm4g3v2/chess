@@ -6,6 +6,7 @@ import { StockfishEngine } from '../ai/stockfish';
 import { runQuickBenchmark, getBenchmarkStats, getBenchmarkHistory } from './benchmark-manager';
 import { detectGamePhase } from './game-phase';
 import { BlunderDetector, MoveEvaluation } from '../ai/blunder-detector';
+import { loadSavedBots, saveBot, deleteBot, getBot } from '../saved-bots';
 
 export class GameManager {
     private io: SocketIOServer;
@@ -22,6 +23,9 @@ export class GameManager {
     private blunderDetector: BlunderDetector = new BlunderDetector();
     private lastEval: number = 0;
     private lastMoveEval: MoveEvaluation | null = null;
+    // Saved bot for play-against mode
+    private opponentBot: NeuralNetwork | null = null;
+    private playingAgainstBotId: string | null = null;
 
     constructor(io: SocketIOServer) {
         this.io = io;
@@ -115,6 +119,45 @@ export class GameManager {
             socket.on('get_learning_snapshots', () => {
                 socket.emit('learning_snapshots', loadLearningSnapshots());
             });
+
+            // Saved bots handlers
+            socket.on('get_saved_bots', () => {
+                socket.emit('saved_bots', loadSavedBots());
+            });
+
+            socket.on('save_bot', (data: { name: string; color: 'white' | 'black' }) => {
+                const ai = data.color === 'white' ? this.whiteAI : this.blackAI;
+                const bot = saveBot(data.name, ai.exportState());
+                socket.emit('bot_saved', bot);
+                socket.emit('saved_bots', loadSavedBots());
+            });
+
+            socket.on('delete_bot', (botId: string) => {
+                deleteBot(botId);
+                socket.emit('saved_bots', loadSavedBots());
+            });
+
+            socket.on('play_against_bot', (botId: string) => {
+                if (!botId) {
+                    // Stop playing against bot
+                    this.opponentBot = null;
+                    this.playingAgainstBotId = null;
+                    console.log('[Bot] Stopped playing against bot');
+                } else {
+                    const bot = getBot(botId);
+                    if (bot) {
+                        this.opponentBot = new NeuralNetwork('black');
+                        this.opponentBot.importState(bot.state);
+                        this.playingAgainstBotId = botId;
+                        console.log(`[Bot] Now playing against "${bot.name}" (ELO: ${bot.elo})`);
+                    }
+                }
+                socket.emit('playing_against', this.playingAgainstBotId);
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Client disconnected', socket.id);
+            });
         });
     }
 
@@ -130,7 +173,12 @@ export class GameManager {
     }
 
     private getCurrentAI(): NeuralNetwork {
-        return this.chess.turn() === 'w' ? this.whiteAI : this.blackAI;
+        if (this.chess.turn() === 'w') {
+            return this.whiteAI;
+        } else {
+            // Use opponent bot if playing against a saved bot, otherwise use the training black AI
+            return this.opponentBot || this.blackAI;
+        }
     }
 
     private async gameLoop() {

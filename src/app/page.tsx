@@ -13,6 +13,8 @@ import MoveCommentary from "@/components/MoveCommentary";
 import GamePhaseIndicator from "@/components/GamePhaseIndicator";
 import BlunderAlert from "@/components/BlunderAlert";
 import SoundToggle from "@/components/SoundToggle";
+import SaveBotModal from "@/components/SaveBotModal";
+import BotManager from "@/components/BotManager";
 import { useChessSounds } from "@/hooks/useChessSounds";
 
 // Move analysis from AI
@@ -135,6 +137,20 @@ export default function Home() {
     // Sound effects
     const { playSound, soundEnabled, toggleSound } = useChessSounds();
     const prevFenRef = useRef<string>("");
+
+    // Saved bots state
+    interface SavedBot {
+        id: string;
+        name: string;
+        createdAt: string;
+        elo: number;
+        gamesPlayed: number;
+        positionsLearned: number;
+    }
+    const [showSaveBot, setShowSaveBot] = useState(false);
+    const [showBotManager, setShowBotManager] = useState(false);
+    const [savedBots, setSavedBots] = useState<SavedBot[]>([]);
+    const [playingAgainstBot, setPlayingAgainstBot] = useState<string | null>(null);
 
     useEffect(() => {
         if (socketRef.current) return;
@@ -266,6 +282,15 @@ export default function Home() {
             setLearningSnapshots(data);
         });
 
+        // Saved bots listeners
+        socket.on("saved_bots", (data: SavedBot[]) => {
+            setSavedBots(data);
+        });
+
+        socket.on("playing_against", (botId: string | null) => {
+            setPlayingAgainstBot(botId);
+        });
+
         return () => {
             socket.disconnect();
             socketRef.current = null;
@@ -389,6 +414,28 @@ export default function Home() {
                         🐟
                         <span className="font-mono text-xs">Benchmark</span>
                     </button>
+                    <button
+                        onClick={() => setShowSaveBot(true)}
+                        className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-900/50 to-pink-900/50 hover:from-purple-800/50 hover:to-pink-800/50 border border-purple-700/50 rounded-lg transition-colors text-sm"
+                    >
+                        💾
+                        <span className="font-mono text-xs">Save AI</span>
+                    </button>
+                    <button
+                        onClick={() => {
+                            if (socketRef.current) {
+                                socketRef.current.emit('get_saved_bots');
+                            }
+                            setShowBotManager(true);
+                        }}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-sm border ${playingAgainstBot
+                                ? 'bg-emerald-600 border-emerald-500'
+                                : 'bg-neutral-800/50 hover:bg-neutral-700/50 border-neutral-700'
+                            }`}
+                    >
+                        🤖
+                        <span className="font-mono text-xs">{playingAgainstBot ? 'Playing Bot' : 'Bots'}</span>
+                    </button>
                 </div>
                 <div className="opacity-50">
                     <h1 className="text-2xl font-bold tracking-tighter mb-1">NEURO_CHESS_ZERO</h1>
@@ -429,6 +476,35 @@ export default function Home() {
                 isRunning={benchmarkRunning}
                 stats={benchmarkStats}
                 history={benchmarkHistory}
+            />
+
+            <SaveBotModal
+                isOpen={showSaveBot}
+                onClose={() => setShowSaveBot(false)}
+                onSave={(name) => {
+                    if (socketRef.current) {
+                        socketRef.current.emit('save_bot', { name, color: 'white' });
+                    }
+                }}
+                currentElo={whiteStats?.elo || 800}
+                positionsLearned={whiteStats?.positionsLearned || 0}
+            />
+
+            <BotManager
+                isOpen={showBotManager}
+                onClose={() => setShowBotManager(false)}
+                bots={savedBots}
+                onPlayAgainst={(botId) => {
+                    if (socketRef.current) {
+                        socketRef.current.emit('play_against_bot', botId);
+                    }
+                }}
+                onDelete={(botId) => {
+                    if (socketRef.current) {
+                        socketRef.current.emit('delete_bot', botId);
+                    }
+                }}
+                currentlyPlaying={playingAgainstBot}
             />
         </main>
     );
