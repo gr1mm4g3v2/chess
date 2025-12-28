@@ -4,7 +4,9 @@ import { AIState } from './ai/neural-net';
 
 const STATE_FILE = path.join(process.cwd(), 'ai-state.json');
 const HISTORY_FILE = path.join(process.cwd(), 'game-history.json');
+const LEARNING_FILE = path.join(process.cwd(), 'learning-snapshots.json');
 const MAX_GAMES_STORED = 50;
+const MAX_SNAPSHOTS_STORED = 100;
 
 export interface DualAIState {
     white: AIState;
@@ -16,10 +18,20 @@ export interface GameRecord {
     timestamp: string;
     pgn: string;
     moves: string[];
+    moveTimesMs: number[]; // Time taken for each move in milliseconds
     result: 'white' | 'black' | 'draw';
     reason: string;
     whiteElo: number;
     blackElo: number;
+}
+
+export interface LearningSnapshot {
+    game: number;
+    timestamp: string;
+    positionsLearned: number;
+    explorationRate: number;
+    winRate: number; // Last 10 games rolling average
+    elo: number;
 }
 
 export function loadDualAIState(): DualAIState | null {
@@ -76,4 +88,37 @@ export function saveGameToHistory(game: Omit<GameRecord, 'id' | 'timestamp'>): v
         console.error('Failed to save game to history:', e);
     }
 }
+
+export function loadLearningSnapshots(): LearningSnapshot[] {
+    try {
+        if (fs.existsSync(LEARNING_FILE)) {
+            const data = fs.readFileSync(LEARNING_FILE, 'utf-8');
+            return JSON.parse(data) as LearningSnapshot[];
+        }
+    } catch (e) {
+        console.error('Failed to load learning snapshots:', e);
+    }
+    return [];
+}
+
+export function saveLearningSnapshot(snapshot: Omit<LearningSnapshot, 'timestamp'>): void {
+    try {
+        const snapshots = loadLearningSnapshots();
+        const newSnapshot: LearningSnapshot = {
+            ...snapshot,
+            timestamp: new Date().toISOString()
+        };
+
+        snapshots.push(newSnapshot);
+
+        // Keep only the last N snapshots
+        const trimmed = snapshots.slice(-MAX_SNAPSHOTS_STORED);
+
+        fs.writeFileSync(LEARNING_FILE, JSON.stringify(trimmed, null, 2));
+        console.log(`Saved learning snapshot for game #${newSnapshot.game}`);
+    } catch (e) {
+        console.error('Failed to save learning snapshot:', e);
+    }
+}
+
 
