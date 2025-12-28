@@ -12,6 +12,8 @@ import BenchmarkPanel from "@/components/BenchmarkPanel";
 import MoveCommentary from "@/components/MoveCommentary";
 import GamePhaseIndicator from "@/components/GamePhaseIndicator";
 import BlunderAlert from "@/components/BlunderAlert";
+import SoundToggle from "@/components/SoundToggle";
+import { useChessSounds } from "@/hooks/useChessSounds";
 
 // Move analysis from AI
 interface MoveAnalysis {
@@ -130,6 +132,10 @@ export default function Home() {
     }
     const [learningSnapshots, setLearningSnapshots] = useState<LearningSnapshot[]>([]);
 
+    // Sound effects
+    const { playSound, soundEnabled, toggleSound } = useChessSounds();
+    const prevFenRef = useRef<string>("");
+
     useEffect(() => {
         if (socketRef.current) return;
 
@@ -148,6 +154,24 @@ export default function Home() {
             setWhiteStats(data.whiteStats);
             setBlackStats(data.blackStats);
             setEvaluation(data.evaluation || 0);
+
+            // Play move sounds
+            if (data.lastMove && prevFenRef.current !== data.fen) {
+                prevFenRef.current = data.fen;
+                if (data.lastMove.san?.includes('#')) {
+                    playSound('check'); // Checkmate!
+                } else if (data.lastMove.san?.includes('+')) {
+                    playSound('check');
+                } else if (data.lastMove.captured) {
+                    playSound('capture');
+                } else if (data.lastMove.san === 'O-O' || data.lastMove.san === 'O-O-O') {
+                    playSound('castle');
+                } else if (data.lastMove.promotion) {
+                    playSound('promote');
+                } else {
+                    playSound('move');
+                }
+            }
 
             // Update move times for current game
             if (data.moveTimesMs) {
@@ -324,6 +348,7 @@ export default function Home() {
 
             <div className="mt-8 text-center z-10 flex flex-col items-center gap-4">
                 <div className="flex items-center gap-3">
+                    <SoundToggle enabled={soundEnabled} onToggle={toggleSound} />
                     <SpeedControl onSpeedChange={(speedMs) => {
                         if (socketRef.current) {
                             socketRef.current.emit('set_speed', speedMs);
