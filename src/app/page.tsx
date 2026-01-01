@@ -15,6 +15,8 @@ import BlunderAlert from "@/components/BlunderAlert";
 import SoundToggle from "@/components/SoundToggle";
 import SaveBotModal from "@/components/SaveBotModal";
 import BotManager from "@/components/BotManager";
+import ThinkingIndicator from "@/components/ThinkingIndicator";
+import TrainingControls from "@/components/TrainingControls";
 import { useChessSounds } from "@/hooks/useChessSounds";
 
 // Move analysis from AI
@@ -152,6 +154,16 @@ export default function Home() {
     const [savedBots, setSavedBots] = useState<SavedBot[]>([]);
     const [playingAgainstBot, setPlayingAgainstBot] = useState<string | null>(null);
 
+    // AI thinking status
+    const [aiStatus, setAiStatus] = useState<{ status: 'thinking' | 'waiting' | 'idle'; turn: 'w' | 'b'; delayMs?: number }>({ status: 'idle', turn: 'w' });
+
+    // Training status
+    const [isTrainingRunning, setIsTrainingRunning] = useState(false);
+
+    // Quick training state
+    const [isQuickTraining, setIsQuickTraining] = useState(false);
+    const [quickTrainProgress, setQuickTrainProgress] = useState<{ current: number; total: number } | undefined>(undefined);
+
     useEffect(() => {
         if (socketRef.current) return;
 
@@ -160,6 +172,8 @@ export default function Home() {
 
         socket.on("connect", () => {
             console.log("Connected to Game Server");
+            // Request training status on connect
+            socket.emit('get_training_status');
         });
 
         socket.on("game_state", (data: any) => {
@@ -291,6 +305,28 @@ export default function Home() {
             setPlayingAgainstBot(botId);
         });
 
+        socket.on("ai_status", (data: { status: 'thinking' | 'waiting'; turn: 'w' | 'b'; delayMs?: number }) => {
+            setAiStatus(data);
+        });
+
+        socket.on("training_status", (data: { running: boolean }) => {
+            setIsTrainingRunning(data.running);
+        });
+
+        socket.on("quick_train_started", () => {
+            setIsQuickTraining(true);
+            setQuickTrainProgress(undefined);
+        });
+
+        socket.on("quick_train_progress", (data: { current: number; total: number }) => {
+            setQuickTrainProgress(data);
+        });
+
+        socket.on("quick_train_complete", () => {
+            setIsQuickTraining(false);
+            setQuickTrainProgress(undefined);
+        });
+
         return () => {
             socket.disconnect();
             socketRef.current = null;
@@ -340,6 +376,14 @@ export default function Home() {
                             <div className="absolute -top-8 left-0 z-20">
                                 <GamePhaseIndicator phase={gamePhase} />
                             </div>
+                            {/* AI Thinking Indicator */}
+                            <div className="absolute -top-8 right-0 z-20">
+                                <ThinkingIndicator
+                                    status={aiStatus.status}
+                                    turn={aiStatus.turn}
+                                    delayMs={aiStatus.delayMs}
+                                />
+                            </div>
                             <CustomBoard fen={fen} lastMove={lastMove} />
                             {isReplaying && (
                                 <div className="absolute top-2 left-2 px-2 py-1 bg-yellow-500/80 text-black text-xs font-bold rounded">
@@ -372,6 +416,17 @@ export default function Home() {
             </div>
 
             <div className="mt-8 text-center z-10 flex flex-col items-center gap-4">
+                {/* Training Controls */}
+                <TrainingControls
+                    isRunning={isTrainingRunning}
+                    isQuickTraining={isQuickTraining}
+                    quickTrainProgress={quickTrainProgress}
+                    onStart={() => socketRef.current?.emit('training_start')}
+                    onPause={() => socketRef.current?.emit('training_pause')}
+                    onStop={() => socketRef.current?.emit('training_stop')}
+                    onQuickTrain={(numGames) => socketRef.current?.emit('quick_train', numGames)}
+                />
+
                 <div className="flex items-center gap-3">
                     <SoundToggle enabled={soundEnabled} onToggle={toggleSound} />
                     <SpeedControl onSpeedChange={(speedMs) => {
@@ -429,8 +484,8 @@ export default function Home() {
                             setShowBotManager(true);
                         }}
                         className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-sm border ${playingAgainstBot
-                                ? 'bg-emerald-600 border-emerald-500'
-                                : 'bg-neutral-800/50 hover:bg-neutral-700/50 border-neutral-700'
+                            ? 'bg-emerald-600 border-emerald-500'
+                            : 'bg-neutral-800/50 hover:bg-neutral-700/50 border-neutral-700'
                             }`}
                     >
                         🤖

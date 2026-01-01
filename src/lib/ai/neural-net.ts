@@ -133,11 +133,18 @@ export class NeuralNetwork {
     }
   }
 
-  // Evaluate position for eval bar (material count)
+  // Evaluate position for eval bar (material count + endgame adjustments)
   public evaluatePosition(chess: Chess): number {
-    const pieceValues: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
     const board = chess.board();
     let score = 0;
+
+    // Check if we're in an endgame
+    const endgame = this.isEndgame(chess);
+
+    // Material evaluation with endgame piece value adjustments
+    const pieceValues: Record<string, number> = endgame
+      ? { p: 1.5, n: 2.5, b: 3.5, r: 5, q: 9, k: 0 }  // Pawns and bishops worth more in endgame
+      : { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 
     for (const row of board) {
       for (const square of row) {
@@ -148,7 +155,148 @@ export class NeuralNetwork {
       }
     }
 
+    // Add endgame-specific evaluation
+    if (endgame) {
+      score += this.evaluateEndgame(chess);
+    }
+
     return Math.max(-1, Math.min(1, score / 30));
+  }
+
+  // Detect if we're in an endgame
+  private isEndgame(chess: Chess): boolean {
+    const board = chess.board();
+    let whiteQueens = 0, blackQueens = 0;
+    let whitePieces = 0, blackPieces = 0;
+    let totalMaterial = 0;
+
+    const pieceValues: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+    for (const row of board) {
+      for (const square of row) {
+        if (square) {
+          const value = pieceValues[square.type] || 0;
+          totalMaterial += value;
+
+          if (square.type === 'q') {
+            if (square.color === 'w') whiteQueens++;
+            else blackQueens++;
+          } else if (square.type !== 'k' && square.type !== 'p') {
+            if (square.color === 'w') whitePieces++;
+            else blackPieces++;
+          }
+        }
+      }
+    }
+
+    // Endgame conditions:
+    // 1. No queens, OR
+    // 2. Each side has ≤1 minor piece with queen, OR
+    // 3. Total material is low (excluding kings)
+    const noQueens = whiteQueens === 0 && blackQueens === 0;
+    const lightQueenEndgame = (whiteQueens <= 1 && whitePieces <= 1) &&
+      (blackQueens <= 1 && blackPieces <= 1);
+    const lowMaterial = totalMaterial <= 26; // Roughly queens traded + some pieces
+
+    return noQueens || lightQueenEndgame || lowMaterial;
+  }
+
+  // Endgame-specific evaluation bonuses
+  private evaluateEndgame(chess: Chess): number {
+    const board = chess.board();
+    let score = 0;
+
+    // Find king positions
+    let whiteKingPos = { row: 0, col: 0 };
+    let blackKingPos = { row: 0, col: 0 };
+    const whitePawns: { row: number; col: number }[] = [];
+    const blackPawns: { row: number; col: number }[] = [];
+
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 8; col++) {
+        const square = board[row][col];
+        if (square) {
+          if (square.type === 'k') {
+            if (square.color === 'w') whiteKingPos = { row, col };
+            else blackKingPos = { row, col };
+          } else if (square.type === 'p') {
+            if (square.color === 'w') whitePawns.push({ row, col });
+            else blackPawns.push({ row, col });
+          }
+        }
+      }
+    }
+
+    // King centralization bonus (center squares are more valuable)
+    const centerDistance = (pos: { row: number; col: number }) => {
+      const centerRow = 3.5, centerCol = 3.5;
+      return Math.abs(pos.row - centerRow) + Math.abs(pos.col - centerCol);
+    };
+
+    // White king centralization (bonus for being closer to center)
+    score += (7 - centerDistance(whiteKingPos)) * 0.1;
+    // Black king centralization penalty (from white's perspective)
+    score -= (7 - centerDistance(blackKingPos)) * 0.1;
+
+    // Passed pawn detection and bonus
+    for (const pawn of whitePawns) {
+      if (this.isPassedPawn(board, pawn, 'w')) {
+        // Bonus based on how far advanced (row 1 = rank 7 for white = closer to promotion)
+        const advancementBonus = (7 - pawn.row) * 0.15;
+        score += 0.3 + advancementBonus;
+      }
+    }
+
+    for (const pawn of blackPawns) {
+      if (this.isPassedPawn(board, pawn, 'b')) {
+        // Bonus based on how far advanced (row 6 = rank 2 for black = closer to promotion)
+        const advancementBonus = pawn.row * 0.15;
+        score -= 0.3 + advancementBonus;
+      }
+    }
+
+    // King proximity to pawns (important for pawn races)
+    for (const pawn of whitePawns) {
+      const whiteKingDist = Math.abs(whiteKingPos.row - pawn.row) + Math.abs(whiteKingPos.col - pawn.col);
+      const blackKingDist = Math.abs(blackKingPos.row - pawn.row) + Math.abs(blackKingPos.col - pawn.col);
+      // Bonus if our king is closer to support our pawn
+      score += (blackKingDist - whiteKingDist) * 0.05;
+    }
+
+    for (const pawn of blackPawns) {
+      const whiteKingDist = Math.abs(whiteKingPos.row - pawn.row) + Math.abs(whiteKingPos.col - pawn.col);
+      const blackKingDist = Math.abs(blackKingPos.row - pawn.row) + Math.abs(blackKingPos.col - pawn.col);
+      // Penalty if their king is closer to their pawn
+      score -= (whiteKingDist - blackKingDist) * 0.05;
+    }
+
+    return score;
+  }
+
+  // Check if a pawn is passed (no enemy pawns blocking or attacking its path)
+  private isPassedPawn(
+    board: ({ type: string; color: string } | null)[][],
+    pawn: { row: number; col: number },
+    color: 'w' | 'b'
+  ): boolean {
+    const direction = color === 'w' ? -1 : 1; // White pawns move up (decreasing row)
+    const enemyColor = color === 'w' ? 'b' : 'w';
+    const startRow = color === 'w' ? pawn.row - 1 : pawn.row + 1;
+    const endRow = color === 'w' ? 0 : 7;
+
+    // Check the file and adjacent files for enemy pawns
+    for (let row = startRow; color === 'w' ? row >= endRow : row <= endRow; row += direction) {
+      for (let colOffset = -1; colOffset <= 1; colOffset++) {
+        const col = pawn.col + colOffset;
+        if (col >= 0 && col < 8) {
+          const square = board[row][col];
+          if (square && square.type === 'p' && square.color === enemyColor) {
+            return false; // Blocked or can be attacked by enemy pawn
+          }
+        }
+      }
+    }
+    return true;
   }
 
   // Get detailed analysis of all candidate moves for AI commentary
@@ -161,7 +309,7 @@ export class NeuralNetwork {
 
     for (const move of moves) {
       const qValue = this.getQValue(posHash, move.san);
-      const immediateValue = this.evaluateMove(move);
+      const immediateValue = this.evaluateMove(move, chess);
       const totalScore = qValue + immediateValue;
       const posEntry = this.qTable.get(posHash);
       const visits = posEntry?.get(move.san)?.visits || 0;
@@ -216,16 +364,46 @@ export class NeuralNetwork {
     return analysis.sort((a, b) => b.totalScore - a.totalScore);
   }
 
-  // Evaluate a move's immediate value
-  private evaluateMove(move: Move): number {
+  // Evaluate a move's immediate value (with optional endgame awareness)
+  private evaluateMove(move: Move, chess?: Chess): number {
     let score = 0;
+
+    // Basic capture value
     if (move.captured) {
       const values: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9 };
       score += (values[move.captured] || 0) * 0.1;
     }
+
+    // Promotion is always great
     if (move.promotion) score += 0.9;
+
+    // Checks
     if (move.san.includes('+')) score += 0.1;
     if (move.san.includes('#')) score += 1.0;
+
+    // Endgame-specific bonuses
+    if (chess && this.isEndgame(chess)) {
+      // Pawn pushes are more valuable in endgames
+      if (move.piece === 'p') {
+        const toRank = parseInt(move.to[1]);
+        const isWhite = chess.turn() === 'w';
+        // Bonus for advancing pawns toward promotion
+        if (isWhite) {
+          score += (toRank - 2) * 0.05; // Rank 7 = 0.25 bonus
+        } else {
+          score += (7 - toRank) * 0.05; // Rank 2 = 0.25 bonus
+        }
+      }
+
+      // King centralization is valuable
+      if (move.piece === 'k') {
+        const toFile = move.to.charCodeAt(0) - 'a'.charCodeAt(0);
+        const toRank = parseInt(move.to[1]) - 1;
+        const centerDist = Math.abs(toFile - 3.5) + Math.abs(toRank - 3.5);
+        score += (7 - centerDist) * 0.02;
+      }
+    }
+
     return score;
   }
 
@@ -250,7 +428,7 @@ export class NeuralNetwork {
     // Epsilon-greedy: explore or exploit
     if (Math.random() < this.explorationRate) {
       // Explore: pick random move, but weight by immediate value
-      const weights = moves.map(m => 1 + this.evaluateMove(m));
+      const weights = moves.map(m => 1 + this.evaluateMove(m, chess));
       const totalWeight = weights.reduce((a, b) => a + b, 0);
       let r = Math.random() * totalWeight;
 
@@ -258,7 +436,7 @@ export class NeuralNetwork {
         r -= weights[i];
         if (r <= 0) {
           const selectedMove = moves[i].san;
-          this.gameHistory.push({ positionHash: posHash, move: selectedMove, reward: this.evaluateMove(moves[i]) });
+          this.gameHistory.push({ positionHash: posHash, move: selectedMove, reward: this.evaluateMove(moves[i], chess) });
           return selectedMove;
         }
       }
@@ -269,14 +447,14 @@ export class NeuralNetwork {
     let bestValue = -Infinity;
 
     for (const move of moves) {
-      const qValue = this.getQValue(posHash, move.san) + this.evaluateMove(move);
+      const qValue = this.getQValue(posHash, move.san) + this.evaluateMove(move, chess);
       if (qValue > bestValue) {
         bestValue = qValue;
         bestMove = move;
       }
     }
 
-    this.gameHistory.push({ positionHash: posHash, move: bestMove.san, reward: this.evaluateMove(bestMove) });
+    this.gameHistory.push({ positionHash: posHash, move: bestMove.san, reward: this.evaluateMove(bestMove, chess) });
     return bestMove.san;
   }
 
@@ -307,7 +485,7 @@ export class NeuralNetwork {
     if (mctsMove) {
       // Record for learning
       const moveObj = moves.find(m => m.san === mctsMove);
-      const reward = moveObj ? this.evaluateMove(moveObj) : 0;
+      const reward = moveObj ? this.evaluateMove(moveObj, chess) : 0;
       this.gameHistory.push({ positionHash: posHash, move: mctsMove, reward });
       return mctsMove;
     }

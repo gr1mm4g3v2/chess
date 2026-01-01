@@ -107,19 +107,25 @@ function expand(node: MCTSNode): MCTSNode {
 function simulate(fen: string, originalTurn: 'w' | 'b'): number {
     const chess = new Chess(fen);
     let depth = 0;
+    const inEndgame = isEndgame(chess);
 
     while (!chess.isGameOver() && depth < MAX_SIMULATION_DEPTH) {
-        const moves = chess.moves();
+        const moves = chess.moves({ verbose: true });
         if (moves.length === 0) break;
 
-        // Random move selection with slight bias toward captures
         let selectedMove: string;
-        const captureMoves = moves.filter(m => m.includes('x'));
 
-        if (captureMoves.length > 0 && Math.random() < 0.3) {
-            selectedMove = captureMoves[Math.floor(Math.random() * captureMoves.length)];
+        if (inEndgame) {
+            // Endgame-aware move selection
+            selectedMove = selectEndgameMove(moves, chess.turn());
         } else {
-            selectedMove = moves[Math.floor(Math.random() * moves.length)];
+            // Random move selection with slight bias toward captures
+            const captureMoves = moves.filter(m => m.captured);
+            if (captureMoves.length > 0 && Math.random() < 0.3) {
+                selectedMove = captureMoves[Math.floor(Math.random() * captureMoves.length)].san;
+            } else {
+                selectedMove = moves[Math.floor(Math.random() * moves.length)].san;
+            }
         }
 
         chess.move(selectedMove);
@@ -137,30 +143,140 @@ function simulate(fen: string, originalTurn: 'w' | 'b'): number {
         return 0.5;
     }
 
-    // If max depth reached, use material evaluation
-    return evaluateMaterial(chess, originalTurn);
+    // If max depth reached, use material evaluation with endgame bonuses
+    return evaluatePosition(chess, originalTurn);
 }
 
 /**
- * Simple material evaluation for incomplete simulations
+ * Select a move in endgame with smarter heuristics
  */
-function evaluateMaterial(chess: Chess, perspective: 'w' | 'b'): number {
-    const pieceValues: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+function selectEndgameMove(moves: Move[], turn: 'w' | 'b'): string {
+    // Score each move based on endgame principles
+    const scoredMoves = moves.map(move => {
+        let score = Math.random() * 0.5; // Base random component
+
+        // Strongly prefer pawn advances (especially passed pawns approaching promotion)
+        if (move.piece === 'p') {
+            const toRank = parseInt(move.to[1]);
+            if (turn === 'w') {
+                score += (toRank - 2) * 0.3; // Rank 7 = 1.5 bonus
+            } else {
+                score += (7 - toRank) * 0.3; // Rank 2 = 1.5 bonus
+            }
+            // Extra bonus for promotion
+            if (move.promotion) {
+                score += 2.0;
+            }
+        }
+
+        // Prefer king moves toward center in endgames
+        if (move.piece === 'k') {
+            const toFile = move.to.charCodeAt(0) - 'a'.charCodeAt(0);
+            const toRank = parseInt(move.to[1]) - 1;
+            const centerDist = Math.abs(toFile - 3.5) + Math.abs(toRank - 3.5);
+            score += (7 - centerDist) * 0.15;
+        }
+
+        // Prefer captures (especially winning ones)
+        if (move.captured) {
+            const values: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+            const capturedValue = values[move.captured] || 0;
+            const pieceValue = values[move.piece] || 0;
+            score += capturedValue * 0.2;
+            if (capturedValue >= pieceValue) {
+                score += 0.3; // Bonus for not losing material
+            }
+        }
+
+        // Avoid stalemate - if king move check if it leaves options
+        if (move.san.includes('+')) {
+            score += 0.4; // Checks are often good
+        }
+
+        return { move: move.san, score };
+    });
+
+    // Select move probabilistically based on scores
+    const totalScore = scoredMoves.reduce((sum, m) => sum + Math.max(0.1, m.score), 0);
+    let rand = Math.random() * totalScore;
+
+    for (const sm of scoredMoves) {
+        rand -= Math.max(0.1, sm.score);
+        if (rand <= 0) {
+            return sm.move;
+        }
+    }
+
+    return scoredMoves[0].move;
+}
+
+/**
+ * Detect if position is an endgame
+ */
+function isEndgame(chess: Chess): boolean {
     const board = chess.board();
-    let whiteScore = 0;
-    let blackScore = 0;
+    let queens = 0;
+    let minorMajor = 0;
+    let totalMaterial = 0;
+
+    const pieceValues: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 
     for (const row of board) {
         for (const square of row) {
             if (square) {
                 const value = pieceValues[square.type] || 0;
+                totalMaterial += value;
+                if (square.type === 'q') queens++;
+                else if (['n', 'b', 'r'].includes(square.type)) minorMajor++;
+            }
+        }
+    }
+
+    // Endgame: no queens, or low material, or few pieces
+    return queens === 0 || totalMaterial <= 26 || minorMajor <= 4;
+}
+
+/**
+ * Enhanced position evaluation with endgame bonuses
+ */
+function evaluatePosition(chess: Chess, perspective: 'w' | 'b'): number {
+    const board = chess.board();
+    const inEndgame = isEndgame(chess);
+
+    // Adjust piece values for endgame
+    const pieceValues: Record<string, number> = inEndgame
+        ? { p: 1.5, n: 2.5, b: 3.5, r: 5, q: 9, k: 0 }
+        : { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+    let whiteScore = 0;
+    let blackScore = 0;
+    let whiteKingPos = { row: 0, col: 0 };
+    let blackKingPos = { row: 0, col: 0 };
+
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const square = board[row][col];
+            if (square) {
+                const value = pieceValues[square.type] || 0;
                 if (square.color === 'w') {
                     whiteScore += value;
+                    if (square.type === 'k') whiteKingPos = { row, col };
                 } else {
                     blackScore += value;
+                    if (square.type === 'k') blackKingPos = { row, col };
                 }
             }
         }
+    }
+
+    // Add endgame bonuses
+    if (inEndgame) {
+        // King centralization bonus
+        const centerDist = (pos: { row: number; col: number }) =>
+            Math.abs(pos.row - 3.5) + Math.abs(pos.col - 3.5);
+
+        whiteScore += (7 - centerDist(whiteKingPos)) * 0.2;
+        blackScore += (7 - centerDist(blackKingPos)) * 0.2;
     }
 
     const scoreDiff = whiteScore - blackScore;

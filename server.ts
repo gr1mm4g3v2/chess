@@ -14,9 +14,9 @@ app.prepare().then(() => {
     const httpServer = createServer(server);
     const io = new Server(httpServer);
 
-    // Initialize Game Manager
+    // Initialize Game Manager (does NOT auto-start training)
     const gameManager = new GameManager(io);
-    gameManager.start();
+    // Training is controlled by the UI - no auto-start
 
     // Socket.io connection
     io.on('connection', (socket) => {

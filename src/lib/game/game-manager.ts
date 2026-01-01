@@ -158,6 +158,43 @@ export class GameManager {
             socket.on('disconnect', () => {
                 console.log('Client disconnected', socket.id);
             });
+
+            // Training control handlers
+            socket.on('training_start', () => {
+                this.start();
+                this.io.emit('training_status', { running: this.isRunning });
+                console.log('[Training] Started');
+            });
+
+            socket.on('training_pause', () => {
+                this.pause();
+                this.io.emit('training_status', { running: this.isRunning });
+                console.log('[Training] Paused');
+            });
+
+            socket.on('training_stop', () => {
+                this.stop();
+                this.io.emit('training_status', { running: this.isRunning });
+                console.log('[Training] Stopped and reset');
+            });
+
+            socket.on('get_training_status', () => {
+                socket.emit('training_status', { running: this.isRunning });
+            });
+
+            socket.on('quick_train', async (numGames: number) => {
+                const games = Math.min(Math.max(1, numGames || 5), 50); // Clamp between 1-50
+                console.log(`[Quick Train] Starting ${games} games...`);
+                this.io.emit('quick_train_started', { games });
+
+                const results = await this.quickTrain(games);
+
+                this.io.emit('quick_train_complete', results);
+                console.log(`[Quick Train] Complete: ${results.whiteWins}W / ${results.blackWins}B / ${results.draws}D`);
+
+                // Broadcast updated state
+                this.broadcastState();
+            });
         });
     }
 
@@ -165,11 +202,136 @@ export class GameManager {
         this.moveIntervalMs = Math.max(50, Math.min(2000, ms));
     }
 
-
     public start() {
         if (this.isRunning) return;
         this.isRunning = true;
+        this.io.emit('ai_status', { status: 'idle', turn: this.chess.turn() });
         this.gameLoop();
+    }
+
+    public pause() {
+        this.isRunning = false;
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+        this.io.emit('ai_status', { status: 'idle', turn: this.chess.turn() });
+    }
+
+    public stop() {
+        this.pause();
+        // Reset the game
+        this.chess.reset();
+        this.moveTimesMs = [];
+        this.blunderDetector.reset();
+        this.lastMoveEval = null;
+        this.broadcastState();
+    }
+
+    // Run N games quickly without UI updates
+    private async quickTrain(numGames: number): Promise<{
+        gamesPlayed: number;
+        whiteWins: number;
+        blackWins: number;
+        draws: number;
+        whiteStats: ReturnType<NeuralNetwork['getStats']>;
+        blackStats: ReturnType<NeuralNetwork['getStats']>;
+    }> {
+        // Pause normal training if running
+        const wasRunning = this.isRunning;
+        if (wasRunning) {
+            this.pause();
+        }
+
+        let whiteWins = 0, blackWins = 0, draws = 0;
+
+        for (let game = 0; game < numGames; game++) {
+            // Reset for new game
+            this.chess.reset();
+
+            // Play game to completion
+            while (!this.chess.isGameOver()) {
+                const currentAI = this.chess.turn() === 'w' ? this.whiteAI : this.blackAI;
+                const move = currentAI.decideMoveAuto(this.chess);
+
+                if (move) {
+                    try {
+                        this.chess.move(move);
+                    } catch {
+                        // Invalid move - shouldn't happen but break if it does
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            // Determine winner and update stats
+            let winner: 'white' | 'black' | 'draw' = 'draw';
+            if (this.chess.isCheckmate()) {
+                winner = this.chess.turn() === 'w' ? 'black' : 'white';
+            }
+
+            if (winner === 'white') {
+                whiteWins++;
+                this.whiteAI.updateStats('win');
+                this.whiteAI.learn('win');
+                this.blackAI.updateStats('loss');
+                this.blackAI.learn('loss');
+            } else if (winner === 'black') {
+                blackWins++;
+                this.blackAI.updateStats('win');
+                this.blackAI.learn('win');
+                this.whiteAI.updateStats('loss');
+                this.whiteAI.learn('loss');
+            } else {
+                draws++;
+                this.whiteAI.updateStats('draw');
+                this.whiteAI.learn('draw');
+                this.blackAI.updateStats('draw');
+                this.blackAI.learn('draw');
+            }
+
+            // Save game to history
+            saveGameToHistory({
+                pgn: this.chess.pgn(),
+                moves: this.chess.history(),
+                moveTimesMs: [],
+                result: winner,
+                reason: this.chess.isCheckmate() ? 'Checkmate' : 'Draw',
+                whiteElo: this.whiteAI.getStats().elo,
+                blackElo: this.blackAI.getStats().elo
+            });
+
+            // Emit progress periodically
+            if ((game + 1) % 5 === 0 || game === numGames - 1) {
+                this.io.emit('quick_train_progress', {
+                    current: game + 1,
+                    total: numGames,
+                    whiteWins,
+                    blackWins,
+                    draws
+                });
+            }
+        }
+
+        // Save AI state
+        saveDualAIState({
+            white: this.whiteAI.exportState(),
+            black: this.blackAI.exportState()
+        });
+
+        // Reset board for display
+        this.chess.reset();
+
+        return {
+            gamesPlayed: numGames,
+            whiteWins,
+            blackWins,
+            draws,
+            whiteStats: this.whiteAI.getStats(),
+            blackStats: this.blackAI.getStats()
+        };
     }
 
     private getCurrentAI(): NeuralNetwork {
@@ -200,6 +362,9 @@ export class GameManager {
             }, 3000);
             return;
         }
+
+        // Emit thinking state
+        this.io.emit('ai_status', { status: 'thinking', turn: this.chess.turn() });
 
         // Track move timing
         const moveStartTime = Date.now();
@@ -245,6 +410,9 @@ export class GameManager {
         }
 
         this.broadcastState();
+
+        // Emit waiting state
+        this.io.emit('ai_status', { status: 'waiting', turn: this.chess.turn(), delayMs: this.moveIntervalMs });
 
         // Schedule next move
         this.timer = setTimeout(() => {
