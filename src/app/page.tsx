@@ -17,6 +17,7 @@ import SaveBotModal from "@/components/SaveBotModal";
 import BotManager from "@/components/BotManager";
 import ThinkingIndicator from "@/components/ThinkingIndicator";
 import TrainingControls from "@/components/TrainingControls";
+import ModeSelector from "@/components/ModeSelector";
 import { useChessSounds } from "@/hooks/useChessSounds";
 
 // Move analysis from AI
@@ -164,6 +165,10 @@ export default function Home() {
     const [isQuickTraining, setIsQuickTraining] = useState(false);
     const [quickTrainProgress, setQuickTrainProgress] = useState<{ current: number; total: number } | undefined>(undefined);
 
+    // AI mode
+    type AIMode = 'q-learning' | 'mcts' | 'hybrid';
+    const [aiMode, setAiMode] = useState<AIMode>('hybrid');
+
     useEffect(() => {
         if (socketRef.current) return;
 
@@ -174,6 +179,8 @@ export default function Home() {
             console.log("Connected to Game Server");
             // Request training status on connect
             socket.emit('get_training_status');
+            // Request AI mode on connect
+            socket.emit('get_ai_mode');
         });
 
         socket.on("game_state", (data: any) => {
@@ -327,6 +334,14 @@ export default function Home() {
             setQuickTrainProgress(undefined);
         });
 
+        socket.on("ai_mode", (mode: AIMode) => {
+            setAiMode(mode);
+        });
+
+        socket.on("ai_mode_changed", (mode: AIMode) => {
+            setAiMode(mode);
+        });
+
         return () => {
             socket.disconnect();
             socketRef.current = null;
@@ -417,15 +432,21 @@ export default function Home() {
 
             <div className="mt-8 text-center z-10 flex flex-col items-center gap-4">
                 {/* Training Controls */}
-                <TrainingControls
-                    isRunning={isTrainingRunning}
-                    isQuickTraining={isQuickTraining}
-                    quickTrainProgress={quickTrainProgress}
-                    onStart={() => socketRef.current?.emit('training_start')}
-                    onPause={() => socketRef.current?.emit('training_pause')}
-                    onStop={() => socketRef.current?.emit('training_stop')}
-                    onQuickTrain={(numGames) => socketRef.current?.emit('quick_train', numGames)}
-                />
+                <div className="flex flex-col gap-3">
+                    <TrainingControls
+                        isRunning={isTrainingRunning}
+                        isQuickTraining={isQuickTraining}
+                        quickTrainProgress={quickTrainProgress}
+                        onStart={() => socketRef.current?.emit('training_start')}
+                        onPause={() => socketRef.current?.emit('training_pause')}
+                        onStop={() => socketRef.current?.emit('training_stop')}
+                        onQuickTrain={(numGames) => socketRef.current?.emit('quick_train', numGames)}
+                    />
+                    <ModeSelector
+                        currentMode={aiMode}
+                        onChange={(mode) => socketRef.current?.emit('set_ai_mode', mode)}
+                    />
+                </div>
 
                 <div className="flex items-center gap-3">
                     <SoundToggle enabled={soundEnabled} onToggle={toggleSound} />
